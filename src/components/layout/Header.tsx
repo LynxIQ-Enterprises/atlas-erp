@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Bell, Calendar, MessageSquare, Command } from 'lucide-react';
+import { Search, Bell, Calendar, MessageSquare, Command, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -8,10 +8,12 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { useBusiness } from '@/contexts/BusinessContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { formatDisplayDate } from '@/lib/localization';
 
 export function Header() {
-  const [searchOpen, setSearchOpen] = useState(false);
   const { currentBusiness } = useBusiness();
+  const { signOut, user } = useAuth();
 
   return (
     <header className="sticky top-0 z-40 h-16 border-b border-border bg-background/80 backdrop-blur-xl">
@@ -20,10 +22,12 @@ export function Header() {
         <div className="flex items-center gap-4">
           <div>
             <h1 className="text-lg font-semibold text-foreground">
-              Welcome back, Admin
+              Welcome back
             </h1>
             <p className="text-sm text-muted-foreground">
-              {currentBusiness?.name || 'Select a business to get started'}
+              {currentBusiness 
+                ? `${currentBusiness.name} • ${currentBusiness.currency}`
+                : 'Select a business to get started'}
             </p>
           </div>
         </div>
@@ -77,32 +81,8 @@ export function Header() {
                   </Button>
                 </div>
               </div>
-              <div className="max-h-80 overflow-y-auto">
-                {[
-                  { title: 'New order received', desc: 'Order #1234 from John Doe', time: '2 min ago', type: 'order' },
-                  { title: 'Low stock alert', desc: 'Product SKU-001 is running low', time: '1 hour ago', type: 'warning' },
-                  { title: 'Payment received', desc: 'Invoice #5678 has been paid', time: '3 hours ago', type: 'success' },
-                ].map((notification, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-3 p-4 hover:bg-accent/50 cursor-pointer transition-colors border-b border-border last:border-0"
-                  >
-                    <div className={`h-2 w-2 mt-2 rounded-full shrink-0 ${
-                      notification.type === 'success' ? 'bg-success' :
-                      notification.type === 'warning' ? 'bg-warning' : 'bg-primary'
-                    }`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">{notification.title}</p>
-                      <p className="text-xs text-muted-foreground truncate">{notification.desc}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{notification.time}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="p-3 border-t border-border">
-                <Button variant="ghost" className="w-full text-sm text-muted-foreground">
-                  View all notifications
-                </Button>
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No new notifications
               </div>
             </PopoverContent>
           </Popover>
@@ -111,13 +91,19 @@ export function Header() {
           <div className="hidden lg:flex items-center gap-2 ml-2 px-3 py-1.5 rounded-lg bg-muted/50">
             <Calendar className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
-              {new Date().toLocaleDateString('en-US', {
-                weekday: 'short',
-                month: 'short',
-                day: 'numeric',
-              })}
+              {formatDisplayDate(new Date())}
             </span>
           </div>
+
+          {/* Sign Out */}
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={signOut}
+            title="Sign out"
+          >
+            <LogOut className="h-5 w-5" />
+          </Button>
         </div>
       </div>
     </header>

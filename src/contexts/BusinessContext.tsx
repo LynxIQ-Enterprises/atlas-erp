@@ -19,7 +19,7 @@ interface BusinessContextType {
 const BusinessContext = createContext<BusinessContextType | undefined>(undefined);
 
 export function BusinessProvider({ children }: { children: ReactNode }) {
-  const { user, session } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [currentBusiness, setCurrentBusiness] = useState<Business | null>(null);
@@ -39,82 +39,79 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      // First get the admin_user record
+      // Get admin_user record
       const { data: adminUser, error: adminError } = await supabase
         .from('admin_users')
         .select('id')
-        .eq('user_id', user.id)
+        .eq('auth_uid', user.id)
         .maybeSingle();
 
-      if (adminError) {
-        console.error('Error fetching admin user:', adminError);
-        throw adminError;
-      }
-
+      if (adminError) throw adminError;
       if (!adminUser) {
-        // User is authenticated but not an admin - this is a new signup
         setBusinesses([]);
         setCurrentBusiness(null);
         setIsLoading(false);
         return;
       }
 
-      // Then get businesses via admin_business_access
+      // Get business access
       const { data: accessData, error: accessError } = await supabase
         .from('admin_business_access')
         .select('business_id')
         .eq('admin_user_id', adminUser.id);
 
-      if (accessError) {
-        console.error('Error fetching business access:', accessError);
-        throw accessError;
-      }
+      if (accessError) throw accessError;
+      const businessIds = accessData?.map(a => a.business_id) || [];
 
-      if (!accessData || accessData.length === 0) {
+      if (businessIds.length === 0) {
         setBusinesses([]);
         setCurrentBusiness(null);
         setIsLoading(false);
         return;
       }
 
-      const businessIds = accessData.map(a => a.business_id);
-
-      // Fetch the actual business data
+      // Fetch actual businesses
       const { data: businessesData, error: businessError } = await supabase
         .from('businesses')
         .select('*')
         .in('id', businessIds)
         .order('name');
 
-      if (businessError) {
-        console.error('Error fetching businesses:', businessError);
-        throw businessError;
-      }
+      if (businessError) throw businessError;
 
       const typedBusinesses = (businessesData || []) as Business[];
       setBusinesses(typedBusinesses);
 
-      // Restore selected business from localStorage
+      // Restore or select default business
       const savedBusinessId = localStorage.getItem(SELECTED_BUSINESS_KEY);
       const savedBusiness = typedBusinesses.find(b => b.id === savedBusinessId);
-      
+
       if (savedBusiness) {
         setCurrentBusiness(savedBusiness);
-      } else if (typedBusinesses.length > 0) {
-        setCurrentBusiness(typedBusinesses[0]);
-        localStorage.setItem(SELECTED_BUSINESS_KEY, typedBusinesses[0].id);
+      } else {
+        setCurrentBusiness(typedBusinesses[0] || null);
+        if (typedBusinesses[0]) localStorage.setItem(SELECTED_BUSINESS_KEY, typedBusinesses[0].id);
       }
     } catch (err) {
       console.error('Error loading businesses:', err);
       setError('Failed to load businesses');
+      setBusinesses([]);
+      setCurrentBusiness(null);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchBusinesses();
-  }, [user]);
+    if (!authLoading && user) {
+      fetchBusinesses();
+    } else if (!authLoading && !user) {
+      // Auth finished but no user
+      setBusinesses([]);
+      setCurrentBusiness(null);
+      setIsLoading(false);
+    }
+  }, [user, authLoading]);
 
   const switchBusiness = (businessId: string) => {
     const business = businesses.find(b => b.id === businessId);
@@ -132,37 +129,27 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     if (!user) return null;
 
     try {
-      // Get admin user ID
       const { data: adminUser, error: adminError } = await supabase
         .from('admin_users')
         .select('id')
-        .eq('user_id', user.id)
+        .eq('auth_uid', user.id)
         .single();
-
       if (adminError) throw adminError;
 
-      // Create business
       const { data: newBusiness, error: businessError } = await supabase
         .from('businesses')
         .insert(businessData)
         .select()
         .single();
-
       if (businessError) throw businessError;
 
-      // Grant access to the admin
-      const { error: accessError } = await supabase
-        .from('admin_business_access')
-        .insert({
-          admin_user_id: adminUser.id,
-          business_id: newBusiness.id,
-        });
+      await supabase.from('admin_business_access').insert({
+        admin_user_id: adminUser.id,
+        business_id: newBusiness.id,
+      });
 
-      if (accessError) throw accessError;
-
-      // Refresh businesses list
       await fetchBusinesses();
-      
+
       toast({
         title: 'Business created',
         description: `${newBusiness.name} has been added.`,
@@ -203,8 +190,6 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
 
 export function useBusiness() {
   const context = useContext(BusinessContext);
-  if (context === undefined) {
-    throw new Error('useBusiness must be used within a BusinessProvider');
-  }
+  if (!context) throw new Error('useBusiness must be used within a BusinessProvider');
   return context;
 }

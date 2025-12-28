@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import {
   BarChart3,
   TrendingUp,
@@ -22,33 +23,12 @@ import {
   LineChart,
   Line,
 } from 'recharts';
-
-const salesData = [
-  { month: 'Jan', sales: 45000 },
-  { month: 'Feb', sales: 52000 },
-  { month: 'Mar', sales: 48000 },
-  { month: 'Apr', sales: 61000 },
-  { month: 'May', sales: 55000 },
-  { month: 'Jun', sales: 67000 },
-];
-
-const categoryData = [
-  { name: 'Electronics', value: 45 },
-  { name: 'Accessories', value: 25 },
-  { name: 'Software', value: 20 },
-  { name: 'Services', value: 10 },
-];
+import { useBusiness } from '@/contexts/BusinessContext';
+import { supabase } from '@/integrations/supabase/client';
+import { LoadingState, EmptyState } from '@/components/ui/LoadingState';
+import { formatCurrency } from '@/lib/localization';
 
 const COLORS = ['hsl(45, 93%, 58%)', 'hsl(199, 89%, 48%)', 'hsl(142, 71%, 45%)', 'hsl(38, 92%, 50%)'];
-
-const growthData = [
-  { month: 'Jan', customers: 120, revenue: 45 },
-  { month: 'Feb', customers: 145, revenue: 52 },
-  { month: 'Mar', customers: 168, revenue: 48 },
-  { month: 'Apr', customers: 195, revenue: 61 },
-  { month: 'May', customers: 230, revenue: 55 },
-  { month: 'Jun', customers: 278, revenue: 67 },
-];
 
 const reportCards = [
   {
@@ -90,9 +70,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
             />
             <span className="text-muted-foreground capitalize">{entry.name}:</span>
             <span className="font-medium text-foreground">
-              {typeof entry.value === 'number' && entry.name.includes('revenue')
-                ? `$${(entry.value * 1000).toLocaleString()}`
-                : entry.value.toLocaleString()}
+              {entry.value.toLocaleString()}
             </span>
           </div>
         ))}
@@ -103,13 +81,88 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function Reports() {
+  const { currentBusiness } = useBusiness();
+  const [isLoading, setIsLoading] = useState(true);
+  const [salesData, setSalesData] = useState<any[]>([]);
+  const [categoryData, setCategoryData] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchReportData = async () => {
+      if (!currentBusiness) {
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        // Fetch invoices for sales data
+        const { data: invoices } = await supabase
+          .from('invoices')
+          .select('total, status, created_at')
+          .eq('business_id', currentBusiness.id)
+          .eq('status', 'paid');
+
+        // Group by month
+        const monthlyData: Record<string, number> = {};
+        (invoices || []).forEach((inv) => {
+          const date = new Date(inv.created_at);
+          const month = date.toLocaleString('default', { month: 'short' });
+          monthlyData[month] = (monthlyData[month] || 0) + Number(inv.total);
+        });
+
+        const salesChartData = Object.entries(monthlyData).map(([month, sales]) => ({
+          month,
+          sales,
+        }));
+        setSalesData(salesChartData);
+
+        // Fetch products for category data
+        const { data: products } = await supabase
+          .from('products')
+          .select('category')
+          .eq('business_id', currentBusiness.id);
+
+        const categoryCount: Record<string, number> = {};
+        (products || []).forEach((p) => {
+          const cat = p.category || 'Other';
+          categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+        });
+
+        const total = Object.values(categoryCount).reduce((a, b) => a + b, 0);
+        const catData = Object.entries(categoryCount).map(([name, count]) => ({
+          name,
+          value: total > 0 ? Math.round((count / total) * 100) : 0,
+        }));
+        setCategoryData(catData);
+      } catch (err) {
+        console.error('Error fetching report data:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchReportData();
+  }, [currentBusiness]);
+
+  if (!currentBusiness) {
+    return (
+      <EmptyState
+        icon={<BarChart3 className="h-12 w-12" />}
+        title="No Business Selected"
+        description="Select a business to view reports."
+      />
+    );
+  }
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Reports</h1>
-          <p className="text-muted-foreground">Analytics and business insights</p>
+          <p className="text-muted-foreground">
+            Analytics and business insights • {currentBusiness.name}
+          </p>
         </div>
         <Button className="gradient-gold">
           <Download className="h-4 w-4 mr-2" />
@@ -142,146 +195,100 @@ export default function Reports() {
         ))}
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Sales Bar Chart */}
-        <Card variant="gradient">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Monthly Sales</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={salesData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(217, 33%, 17%)" vertical={false} />
-                  <XAxis
-                    dataKey="month"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
-                  />
-                  <YAxis
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
-                    tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar
-                    dataKey="sales"
-                    fill="hsl(45, 93%, 58%)"
-                    radius={[4, 4, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Category Pie Chart */}
-        <Card variant="gradient">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Sales by Category</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px] flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
-                <RechartsPie>
-                  <Pie
-                    data={categoryData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {categoryData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<CustomTooltip />} />
-                </RechartsPie>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex flex-wrap justify-center gap-4 mt-4">
-              {categoryData.map((item, index) => (
-                <div key={item.name} className="flex items-center gap-2">
-                  <div
-                    className="h-3 w-3 rounded-full"
-                    style={{ backgroundColor: COLORS[index] }}
-                  />
-                  <span className="text-sm text-muted-foreground">{item.name}</span>
-                  <span className="text-sm font-medium text-foreground">{item.value}%</span>
+      {isLoading ? (
+        <LoadingState message="Loading reports..." />
+      ) : (
+        <>
+          {/* Charts Row */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {/* Sales Bar Chart */}
+            <Card variant="gradient">
+              <CardHeader>
+                <CardTitle className="text-lg font-semibold">Monthly Sales</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="h-[300px]">
+                  {salesData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={salesData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(217, 33%, 17%)" vertical={false} />
+                        <XAxis
+                          dataKey="month"
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
+                        />
+                        <YAxis
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
+                        />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Bar
+                          dataKey="sales"
+                          fill="hsl(45, 93%, 58%)"
+                          radius={[4, 4, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-muted-foreground">
+                      No sales data yet
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+              </CardContent>
+            </Card>
 
-      {/* Growth Chart */}
-      <Card variant="gradient">
-        <CardHeader>
-          <CardTitle className="text-lg font-semibold">Growth Trends</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={growthData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(217, 33%, 17%)" vertical={false} />
-                <XAxis
-                  dataKey="month"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
-                />
-                <YAxis
-                  yAxisId="left"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
-                />
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: 'hsl(215, 20%, 55%)', fontSize: 12 }}
-                  tickFormatter={(value) => `$${value}k`}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Line
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="customers"
-                  stroke="hsl(199, 89%, 48%)"
-                  strokeWidth={2}
-                  dot={{ fill: 'hsl(199, 89%, 48%)', r: 4 }}
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="revenue"
-                  stroke="hsl(45, 93%, 58%)"
-                  strokeWidth={2}
-                  dot={{ fill: 'hsl(45, 93%, 58%)', r: 4 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            {/* Category Pie Chart */}
+            <Card variant="gradient">
+              <CardHeader>
+                <CardTitle className="text-lg font-semibold">Products by Category</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="h-[300px] flex items-center justify-center">
+                  {categoryData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RechartsPie>
+                        <Pie
+                          data={categoryData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={100}
+                          paddingAngle={4}
+                          dataKey="value"
+                        >
+                          {categoryData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip content={<CustomTooltip />} />
+                      </RechartsPie>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="text-muted-foreground">No product data yet</div>
+                  )}
+                </div>
+                {categoryData.length > 0 && (
+                  <div className="flex flex-wrap justify-center gap-4 mt-4">
+                    {categoryData.map((item, index) => (
+                      <div key={item.name} className="flex items-center gap-2">
+                        <div
+                          className="h-3 w-3 rounded-full"
+                          style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                        />
+                        <span className="text-sm text-muted-foreground">{item.name}</span>
+                        <span className="text-sm font-medium text-foreground">{item.value}%</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
-          <div className="flex items-center justify-center gap-6 mt-4">
-            <div className="flex items-center gap-2">
-              <div className="h-3 w-3 rounded-full bg-info" />
-              <span className="text-sm text-muted-foreground">Customers</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="h-3 w-3 rounded-full bg-primary" />
-              <span className="text-sm text-muted-foreground">Revenue</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        </>
+      )}
     </div>
   );
 }

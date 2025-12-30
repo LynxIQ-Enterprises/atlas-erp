@@ -6,13 +6,20 @@ import { useToast } from '@/hooks/use-toast';
 
 const SELECTED_BUSINESS_KEY = 'selected_business_id';
 
+interface NewBusinessInput {
+  name: string;
+  type: Business['type'];
+  address?: string | null;
+  currency?: string;
+}
+
 interface BusinessContextType {
   businesses: Business[];
   currentBusiness: Business | null;
   isLoading: boolean;
   error: string | null;
   switchBusiness: (businessId: string) => void;
-  addBusiness: (business: Omit<Business, 'id' | 'created_at' | 'updated_at'>) => Promise<Business | null>;
+  addBusiness: (business: NewBusinessInput) => Promise<Business | null>;
   refreshBusinesses: () => Promise<void>;
 }
 
@@ -39,58 +46,51 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     try {
-      // Get admin_user record (super admin: one user, many businesses)
+      // Get admin_user record for this authenticated user
       const { data: adminUser, error: adminError } = await supabase
         .from('admin_users')
         .select('id')
-        .eq('auth_uid', user.id)
+        .eq('user_id', user.id)
         .maybeSingle();
 
       if (adminError) throw adminError;
+
+      // If the logged-in user isn't registered as an admin user, treat as no access
       if (!adminUser) {
         setBusinesses([]);
         setCurrentBusiness(null);
-        setIsLoading(false);
         return;
       }
 
-      // Get business access for this admin
-      const { data: accessData, error: accessError } = await supabase
+      // Fetch businesses via access table join (single roundtrip)
+      const { data: accessRows, error: accessError } = await supabase
         .from('admin_business_access')
-        .select('business_id')
+        .select('businesses(*)')
         .eq('admin_user_id', adminUser.id);
 
       if (accessError) throw accessError;
-      const businessIds = accessData?.map(a => a.business_id) || [];
 
-      if (businessIds.length === 0) {
-        setBusinesses([]);
+      const typedBusinesses = (accessRows || [])
+        .map((r: any) => r.businesses)
+        .filter(Boolean) as Business[];
+
+      typedBusinesses.sort((a, b) => a.name.localeCompare(b.name));
+      setBusinesses(typedBusinesses);
+
+      if (typedBusinesses.length === 0) {
         setCurrentBusiness(null);
-        setIsLoading(false);
         return;
       }
 
-      // Fetch businesses
-      const { data: businessesData, error: businessError } = await supabase
-        .from('businesses')
-        .select('*')
-        .in('id', businessIds)
-        .order('name');
-
-      if (businessError) throw businessError;
-
-      const typedBusinesses = (businessesData || []) as Business[];
-      setBusinesses(typedBusinesses);
-
       // Restore or select default business
       const savedBusinessId = localStorage.getItem(SELECTED_BUSINESS_KEY);
-      const savedBusiness = typedBusinesses.find(b => b.id === savedBusinessId);
+      const savedBusiness = typedBusinesses.find((b) => b.id === savedBusinessId);
 
       if (savedBusiness) {
         setCurrentBusiness(savedBusiness);
       } else {
-        setCurrentBusiness(typedBusinesses[0] || null);
-        if (typedBusinesses[0]) localStorage.setItem(SELECTED_BUSINESS_KEY, typedBusinesses[0].id);
+        setCurrentBusiness(typedBusinesses[0]);
+        localStorage.setItem(SELECTED_BUSINESS_KEY, typedBusinesses[0].id);
       }
     } catch (err) {
       console.error('Error loading businesses:', err);
@@ -102,18 +102,21 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
-  // Only fetch businesses after auth is fully loaded and user is present
+  // Only fetch businesses after auth is fully loaded.
   useEffect(() => {
-    if (!authLoading) {
-      fetchBusinesses();
-    }
-    // If user logs out, clear business state
-    if (!authLoading && !user) {
+    if (authLoading) return;
+
+    // If logged out, clear business state deterministically.
+    if (!user) {
       setBusinesses([]);
       setCurrentBusiness(null);
       setIsLoading(false);
+      setError(null);
+      return;
     }
-  }, [user, authLoading, fetchBusinesses]);
+
+    fetchBusinesses();
+  }, [authLoading, user, fetchBusinesses]);
 
   // Switch business and persist selection
   const switchBusiness = (businessId: string) => {
@@ -129,28 +132,41 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
   };
 
   // Add a new business and grant access to current admin
-  const addBusiness = async (businessData: Omit<Business, 'id' | 'created_at' | 'updated_at'>): Promise<Business | null> => {
+  const addBusiness = async (businessData: NewBusinessInput): Promise<Business | null> => {
     if (!user) return null;
 
     try {
       const { data: adminUser, error: adminError } = await supabase
         .from('admin_users')
         .select('id')
-        .eq('auth_uid', user.id)
-        .single();
+        .eq('user_id', user.id)
+        .maybeSingle();
+
       if (adminError) throw adminError;
+      if (!adminUser) throw new Error('Admin user not found');
+
+      const payload = {
+        name: businessData.name,
+        type: businessData.type,
+        address: businessData.address ?? null,
+        currency: businessData.currency ?? 'ZAR',
+      };
 
       const { data: newBusiness, error: businessError } = await supabase
         .from('businesses')
-        .insert(businessData)
-        .select()
+        // Cast to avoid excessively deep TS inference on Postgrest generics
+        .insert(payload as any)
+        .select('*')
         .single();
+
       if (businessError) throw businessError;
 
-      await supabase.from('admin_business_access').insert({
+      const { error: accessError } = await supabase.from('admin_business_access').insert({
         admin_user_id: adminUser.id,
         business_id: newBusiness.id,
-      });
+      } as any);
+
+      if (accessError) throw accessError;
 
       await fetchBusinesses();
 

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -22,18 +22,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
+    const didInit = { current: false };
 
-    // Listen for auth state changes
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Listen for auth state changes FIRST.
+    // IMPORTANT: Avoid setting isLoading=false from the initial event to prevent redirect flicker.
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
+
+      // Ignore the initial event until our explicit getSession() resolves.
+      if (!didInit.current && event === 'INITIAL_SESSION') return;
+
       setSession(session);
       setUser(session?.user ?? null);
       setIsLoading(false);
     });
 
-    // Get initial session after listener is set
+    // THEN resolve the initial session exactly once.
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!isMounted) return;
+      didInit.current = true;
       setSession(session);
       setUser(session?.user ?? null);
       setIsLoading(false);

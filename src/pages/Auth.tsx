@@ -66,7 +66,7 @@ export default function Auth() {
             title: 'Welcome back!',
             description: 'You have successfully logged in.',
           });
-          navigate('/', { replace: true });
+          // Let the auth state listener + redirect effect handle navigation deterministically.
         }
       } else {
         const { error } = await signUp(email, password, fullName);

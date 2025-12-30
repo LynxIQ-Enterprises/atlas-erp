@@ -20,16 +20,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Prevent duplicate auto-refresh timers (can happen during remounts/HMR) by owning the lifecycle here.
+  const didInit = useRef(false);
+
   useEffect(() => {
     let isMounted = true;
-    const didInit = { current: false };
 
-    // Listen for auth state changes FIRST.
-    // IMPORTANT: Avoid setting isLoading=false from the initial event to prevent redirect flicker.
+    // Ensure there is only ever ONE refresh loop running.
+    supabase.auth.stopAutoRefresh();
+
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (!isMounted) return;
 
-      // Ignore the initial event until our explicit getSession() resolves.
+      // Ignore INITIAL_SESSION until our explicit getSession resolves.
       if (!didInit.current && event === 'INITIAL_SESSION') return;
 
       setSession(session);
@@ -37,20 +40,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
     });
 
-    // THEN resolve the initial session exactly once.
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!isMounted) return;
-      didInit.current = true;
-      setSession(session);
-      setUser(session?.user ?? null);
-      setIsLoading(false);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        if (!isMounted) return;
+        didInit.current = true;
+        setSession(session);
+        setUser(session?.user ?? null);
+        setIsLoading(false);
+
+        // Start refresh loop only after we have a definitive session state.
+        supabase.auth.startAutoRefresh();
+      })
+      .catch(() => {
+        // If anything goes wrong, fail closed (locked state), but don't spam refresh.
+        if (!isMounted) return;
+        didInit.current = true;
+        setSession(null);
+        setUser(null);
+        setIsLoading(false);
+      });
 
     return () => {
       isMounted = false;
       listener.subscription.unsubscribe();
+      supabase.auth.stopAutoRefresh();
     };
   }, []);
+
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
